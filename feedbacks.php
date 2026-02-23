@@ -1,6 +1,7 @@
 <?php
 
-function moveFromCfdb7ToFeedbacks($insert_id) {
+function moveFromCfdb7ToFeedbacks($insert_id)
+{
     global $wpdb;
     $table_name = $wpdb->prefix . 'db7_forms';
     $query = $wpdb->prepare("SELECT form_post_id, form_value FROM {$table_name} WHERE form_id = %d", $insert_id);
@@ -42,25 +43,75 @@ function moveFromCfdb7ToFeedbacks($insert_id) {
     }
 }
 
-add_filter( 'cfdb7_after_save_data', 'moveFromCfdb7ToFeedbacks', 12, 1 );
+add_filter('cfdb7_after_save_data', 'moveFromCfdb7ToFeedbacks', 12, 1);
 
-function show_innovation_feedback_form() {
-	$form = do_shortcode('[contact-form-7 id="'.INNOVATION_FEEDBACK_FORM.'" title="Contact form 1"]');
+function show_innovation_feedback_form()
+{
+    $form = do_shortcode('[contact-form-7 id="' . INNOVATION_FEEDBACK_FORM . '" title="Contact form 1"]');
     $form = str_replace('{{group_name}}', $_GET['group'], $form);
+    // remove recaptcha from form
+    wp_dequeue_script( 'wpcf7-recaptcha' );     
+    wp_dequeue_style( 'wpcf7-recaptcha' );
+    wp_dequeue_script( 'google-recaptcha' );
     return $form;
 }
 add_shortcode('show_innovation_feedback_form', 'show_innovation_feedback_form');
 
-function getInnovationGroups() {
+function show_innovation_feedbacks()
+{
+    include plugin_dir_path(__FILE__) . 'templates/course_feedbacks_page.php';
+}
+add_shortcode('innovation_feedbacks', 'show_innovation_feedbacks');
+
+function getInnovationGroups()
+{
     global $wpdb;
+    $form_post_id = $_POST['form_post_id'];
+    $where = "";
+    if ($form_post_id) {
+        $innovation_shortcut = get_post_meta($form_post_id, 'innovationProgramShortcut', true);   
+        if ($innovation_shortcut) {
+                $where = "WHERE group_name LIKE '%{$innovation_shortcut}%'";
+        }
+    }
+
     $table_name = $wpdb->prefix . "innovation_groups";
-    $query = "SELECT group_name FROM {$table_name} ORDER BY group_name";
+    $query = "SELECT group_name FROM {$table_name} {$where} ORDER BY group_name";
     $results = $wpdb->get_results($query, ARRAY_A);
+
+    $shortcuts = [];
+    foreach ($results as $key => $result) {
+        $exploded_group_name = explode("-", $result['group_name']);
+        $programm_shortcut = trim($exploded_group_name[2]);
+
+        if (!isset($shortcuts[$programm_shortcut])) {
+            $sql = $wpdb->prepare("SELECT post_title FROM {$wpdb->prefix}posts WHERE ID = (SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key = 'innovationProgramShortcut' AND meta_value = %s)", $programm_shortcut);
+            $program = $wpdb->get_row($sql);
+            if ($program) {
+                $results[$key]['program'] = $program->post_title;
+                $shortcuts[$programm_shortcut] = $program->post_title;
+            }
+        } else {
+            $results[$key]['program'] = $shortcuts[$programm_shortcut];
+        }
+
+        $year = trim($exploded_group_name[1]) == 'S' ? trim($exploded_group_name[3]) : trim($exploded_group_name[1]); 
+        $results[$key]['year'] = $year;
+    }
+
+    //sort by program name, then by group name
+    usort($results, function ($a, $b) {
+        if ($a['program'] == $b['program']) {
+            return strcmp($a['group_name'], $b['group_name']);
+        }
+        return strcmp($a['program'], $b['program']);
+    });
+
     wp_send_json_success($results, 200);
 }
 
-
-function loadFeedbacks() {
+function loadFeedbacks()
+{
     global $wpdb;
     $selectedInnovationGroup = $_POST['selectedInnovationGroup'];
     $table_name = $wpdb->prefix . "innovation_groups";
@@ -75,69 +126,73 @@ function loadFeedbacks() {
     } else {
         wp_send_json_error('Skupina neexistuje', 404);
     }
-        
+
 }
 
 
-function prepareDataForCharts($submittedFeedbacks) {
+function prepareDataForCharts($submittedFeedbacks)
+{
     $accumulatedData = array();
 
     $questions_to_titles = array(
-        'obsah-1' => ["type"=> "radio", "title" => "1. Ako hodnotíte obsah vzdelávania s ohľadom na obsah jednotlivých tém vzdelávania?"],
-        'ciele-2' => ["type"=> "radio", "title" => "2. Ako hodnotíte dosiahnutie stanovených cieľov vzdelávania?"],
-        'vedomosti-3' => ["type"=> "radio", "title" => "3. Ako hodnotíte rozsah a úroveň odborných vedomostí lektorky/lektora?"],
-        'pristup-4' => ["type"=> "radio", "title" => "4. Ste spokojná/ý s prístupom lektorky/lektora k účastníkom vzdelávania?"],
-        'komunikacia-5' => ["type"=> "radio", "title" => "5. Ako hodnotíte úroveň komunikácie lektorky/lektora s účastníkmi vzdelávania?"],
-        'formy-6' => ["type"=> "radio", "title" => "6. Ako hodnotíte použité formy vzdelávania?"],
-        'metody-7' => ["type"=> "radio", "title" => "7. Ako hodnotíte použité metódy vzdelávania?"],
-        'dostupnost-8' => ["type"=> "radio", "title" => "8. Ako hodnotíte dostupnosť a ochotu lektorky/lektora - konzultácie v prípade potreby, elektronická komunikácia a pod.?"],
-        'casova-dotacia-9' => ["type"=> "radio", "title" => "9. Ako hodnotíte celkovú časovú dotáciu vzdelávania vzhľadom na obsah vzdelávania?"],
-        'miesto-10' => ["type"=> "radio", "title" => "10. Ako hodnotíte dostupnosť miesta vzdelávania?"],
-        'harmonogram-11' => ["type"=> "radio", "title" => "11. Ako hodnotíte časový harmonogram vzdelávania? Vyhovovalo Vám rozvrhnutie vzdelávania?"],
-        'frekvencia-12' => ["type"=> "radio", "title" => "12. Vyhovovala Vám frekvencia vzdelávacích aktivít?"],
-        'vybavenie-13' => ["type"=> "radio", "title" => "13. Ako hodnotíte materiálno-technické a priestorové vybavenie miesta vzdelávania?"],
-        'technologie-14' => ["type"=> "radio", "title" => "14. Ako hodnotíte využívanie digitálnych technológií pri vzdelávaní?"],
-        'materialy-15' => ["type"=> "radio", "title" => "15. Ste spokojná/ý s poskytnutými vzdelávacími materiálmi?"],
-        'komunikacia-pred-16' => ["type"=> "radio", "title" => "16. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania pred vzdelávaním?"],
-        'komunikacia-pocas-17' => ["type"=> "radio", "title" => "17. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania počas vzdelávania?"],
-        'komunikacia-po-18' => ["type"=> "radio", "title" => "18. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania po ukončení vzdelávania?"],
-        'atmosfera-19' => ["type"=> "radio", "title" => "19. Hodnotíte atmosféru vzdelávania ako pozitívnu a tvorivú?"],
-        'dovody-atmosfera-20' => ["type"=> "written", "title" => "20. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
-        'expert-21' => ["type"=> "radio", "title" => "21. Považujete lektorku/lektora za experta v danom obsahu vzdelávania?"],
-        'dovody-expert-22' => ["type"=> "written", "title" => "22. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
-        'priestor-23' => ["type"=> "radio", "title" => "23. Mali ste dostatočný priestor na prezentovanie vlastných poznatkov, skúseností, príp. zručností?"],
-        'vyuzitie-praca-24' => ["type"=> "radio", "title" => "24. Považujete nadobudnuté poznatky, skúsenosti a zručnosti za využiteľné vo Vašej pracovnej činnosti?"],
-        'dovody-praca-25' => ["type"=> "written", "title" => "25. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
-        'vyuzitie-profesijny-26' => ["type"=> "radio", "title" => "26. Považujete nadobudnuté poznatky, skúsenosti a zručnosti za využiteľné vo Vašom ďalšom profesijnom rozvoji?"],
-        'dovody-profesijny-27' => ["type"=> "written", "title" => "27. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
-        'odporucenie-28' => ["type"=> "radio", "title" => "28. Odporučili by ste absolvované vzdelávanie svojim kolegom?"],
-        'dovody-odporucenie-29' => ["type"=> "written", "title" => "29. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
-        'temy-30' => ["type"=> "written", "title" => "30. Akú/é tému/y by ste doplnili do obsahu vzdelávacej aktivity?"],
-        'materialy-forma-31' => ["type"=> "radio", "title" => "31. Boli Vám poskytnuté učebné materiály? V digitálnej alebo tlačenej forme?"],
-        'metody-32' => ["type"=> "checkbox", "title" => "32. Vyberte príp. doplňte metódy, ktoré boli využité počas vzdelávacej aktivity"],
-        'odkaz-33' => ["type"=> "written", "title" => "33. Môžete nám zanechať akýkoľvek odkaz"],
+        'obsah-1' => ["type" => "radio", "title" => "1. Ako hodnotíte obsah vzdelávania s ohľadom na obsah jednotlivých tém vzdelávania?"],
+        'ciele-2' => ["type" => "radio", "title" => "2. Ako hodnotíte dosiahnutie stanovených cieľov vzdelávania?"],
+        'vedomosti-3' => ["type" => "radio", "title" => "3. Ako hodnotíte rozsah a úroveň odborných vedomostí lektorky/lektora?"],
+        'pristup-4' => ["type" => "radio", "title" => "4. Ste spokojná/ý s prístupom lektorky/lektora k účastníkom vzdelávania?"],
+        'komunikacia-5' => ["type" => "radio", "title" => "5. Ako hodnotíte úroveň komunikácie lektorky/lektora s účastníkmi vzdelávania?"],
+        'formy-6' => ["type" => "radio", "title" => "6. Ako hodnotíte použité formy vzdelávania?"],
+        'metody-7' => ["type" => "radio", "title" => "7. Ako hodnotíte použité metódy vzdelávania?"],
+        'dostupnost-8' => ["type" => "radio", "title" => "8. Ako hodnotíte dostupnosť a ochotu lektorky/lektora - konzultácie v prípade potreby, elektronická komunikácia a pod.?"],
+        'casova-dotacia-9' => ["type" => "radio", "title" => "9. Ako hodnotíte celkovú časovú dotáciu vzdelávania vzhľadom na obsah vzdelávania?"],
+        'miesto-10' => ["type" => "radio", "title" => "10. Ako hodnotíte dostupnosť miesta vzdelávania?"],
+        'harmonogram-11' => ["type" => "radio", "title" => "11. Ako hodnotíte časový harmonogram vzdelávania? Vyhovovalo Vám rozvrhnutie vzdelávania?"],
+        'frekvencia-12' => ["type" => "radio", "title" => "12. Vyhovovala Vám frekvencia vzdelávacích aktivít?"],
+        'vybavenie-13' => ["type" => "radio", "title" => "13. Ako hodnotíte materiálno-technické a priestorové vybavenie miesta vzdelávania?"],
+        'technologie-14' => ["type" => "radio", "title" => "14. Ako hodnotíte využívanie digitálnych technológií pri vzdelávaní?"],
+        'materialy-15' => ["type" => "radio", "title" => "15. Ste spokojná/ý s poskytnutými vzdelávacími materiálmi?"],
+        'komunikacia-pred-16' => ["type" => "radio", "title" => "16. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania pred vzdelávaním?"],
+        'komunikacia-pocas-17' => ["type" => "radio", "title" => "17. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania počas vzdelávania?"],
+        'komunikacia-po-18' => ["type" => "radio", "title" => "18. Ako hodnotíte komunikáciu organizátorov s účastníkmi vzdelávania po ukončení vzdelávania?"],
+        'atmosfera-19' => ["type" => "radio", "title" => "19. Hodnotíte atmosféru vzdelávania ako pozitívnu a tvorivú?"],
+        'dovody-atmosfera-20' => ["type" => "written", "title" => "20. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
+        'expert-21' => ["type" => "radio", "title" => "21. Považujete lektorku/lektora za experta v danom obsahu vzdelávania?"],
+        'dovody-expert-22' => ["type" => "written", "title" => "22. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
+        'priestor-23' => ["type" => "radio", "title" => "23. Mali ste dostatočný priestor na prezentovanie vlastných poznatkov, skúseností, príp. zručností?"],
+        'vyuzitie-praca-24' => ["type" => "radio", "title" => "24. Považujete nadobudnuté poznatky, skúsenosti a zručnosti za využiteľné vo Vašej pracovnej činnosti?"],
+        'dovody-praca-25' => ["type" => "written", "title" => "25. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
+        'vyuzitie-profesijny-26' => ["type" => "radio", "title" => "26. Považujete nadobudnuté poznatky, skúsenosti a zručnosti za využiteľné vo Vašom ďalšom profesijnom rozvoji?"],
+        'dovody-profesijny-27' => ["type" => "written", "title" => "27. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
+        'odporucenie-28' => ["type" => "radio", "title" => "28. Odporučili by ste absolvované vzdelávanie svojim kolegom?"],
+        'dovody-odporucenie-29' => ["type" => "written", "title" => "29. Ak ste na predchádzajúcu otázku odpovedali nie, môžete uviesť dôvody Vášho hodnotenia:"],
+        'temy-30' => ["type" => "written", "title" => "30. Akú/é tému/y by ste doplnili do obsahu vzdelávacej aktivity?"],
+        'materialy-forma-31' => ["type" => "radio", "title" => "31. Boli Vám poskytnuté učebné materiály? V digitálnej alebo tlačenej forme?"],
+        'metody-32' => ["type" => "checkbox", "title" => "32. Vyberte príp. doplňte metódy, ktoré boli využité počas vzdelávacej aktivity"],
+        'odkaz-33' => ["type" => "written", "title" => "33. Môžete nám zanechať akýkoľvek odkaz"],
     );
 
     // Define a class for question data
-    class QuestionData {
+    class QuestionData
+    {
         public $question;
         public $selectedAnswers;
         public $writtenAnswers;
         public $answersType;
 
-        public function __construct($cf7_question) {
+        public function __construct($cf7_question)
+        {
             $this->question = $cf7_question;
             $this->selectedAnswers = [];
             $this->writtenAnswers = [];
         }
 
-        public function addAnswer($answer) {
+        public function addAnswer($answer)
+        {
             if (is_array($answer)) {
-                $key = (string)$answer[0];
+                $key = (string) $answer[0];
                 if (!isset($this->selectedAnswers[$key])) {
-                    $this->selectedAnswers[(string)$key] = 1;
+                    $this->selectedAnswers[(string) $key] = 1;
                 } else {
-                    $this->selectedAnswers[(string)$key] += 1;
+                    $this->selectedAnswers[(string) $key] += 1;
                 }
             } else {
                 $this->writtenAnswers[] = $answer;
@@ -158,6 +213,9 @@ function prepareDataForCharts($submittedFeedbacks) {
                 $accumulatedData[$cf7_question] = new QuestionData($title);
             }
             $accumulatedData[$cf7_question]->answersType = $questions_to_titles[$cf7_question]['type'];
+            if ($answer === '') {
+                continue;
+            }
             $accumulatedData[$cf7_question]->addAnswer($answer);
         }
     }

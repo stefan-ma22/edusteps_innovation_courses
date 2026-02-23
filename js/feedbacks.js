@@ -1,85 +1,143 @@
+var innovationGroups = [];
+
 jQuery(document).ready(function () {
+
+    if (window.location.search) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const group = urlParams.get('group');
+        if (group) {
+            loadFeedbacks(group);
+        }
+    }
+
     jQuery("#generate_feedback_form").on("click", function () {
-        generateFeedbackLink();
+        // get form_post_id from url parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const form_post_id = urlParams.get('form_post_id');
+        generateFeedbackLink(form_post_id);
     });
 
-    jQuery(document).on('change', '.innovation-group', function () {
-        loadFeedbacks();
+    jQuery("#generate_feedback_form_for_specific_group").on("click", function () {
+        generateFeedbackLinkForSpecificGroup(jQuery(this).data('group'));
+    });
+
+    jQuery("#innovationTopic").on("change", function () {
+        var selectedProgram = jQuery("#innovationTopic").val();
+        var year = jQuery("#innovationYears");
+        //clear year
+        year.html('<option value="">Vyberte rok</option>');
+        if (selectedProgram) {
+            var years = innovationGroups[selectedProgram];
+            for (var singleYear in years) {
+                year.append('<option value="' + singleYear + '">' + singleYear + '</option>');
+            }
+        }
+    });
+
+    jQuery("#innovationYears").on("change", function () {
+        var selectedProgram = jQuery("#innovationTopic").val();
+        var selectedYear = jQuery(this).val();
+        var groups = innovationGroups[selectedProgram][selectedYear];
+        var groupSelect = jQuery("#innovationGroups");
+        groupSelect.html('<option value="">Vyberte skupinu</option>');
+        for (var singleGroup in groups) {
+            groupSelect.append('<option value="' + groups[singleGroup] + '">' + groups[singleGroup] + '</option>');
+        }
+    });
+
+    jQuery(document).on('change', '#innovationGroups', function () {
+        var selectedGroup = jQuery(this).val();
+        //add get parameter to url
+        var newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + '?group=' + encodeURIComponent(selectedGroup);
+        window.history.replaceState({ path: newUrl }, '', newUrl);
+        loadFeedbacks(selectedGroup);
     });
 });
 
-function generateFeedbackLink() {
+function generateFeedbackLink(form_post_id) {
     // open modal and load all innovation groups and after user selects a group, generate link in the modal and add button which will copy to clipboard
     var modalBody = '<p>Vyberte skupinu pre ktorú chcete vygenerovať odkaz na spätnú väzbu:</p>';
     modalBody += '<select id="feedbackGroupSelect">';
     // Load all innovation groups
-    loadInnovationGroups().then(groups => {
+    loadInnovationGroups(form_post_id).then(groups => {
         groups.forEach(function (group) {
             modalBody += '<option value="' + group.group_name + '">' + group.group_name + '</option>';
         });
         modalBody += '</select>';
-        modalBody += '<button style="margin-left: 10px;" id="generateFeedbackLinkButton">Vygenerovať odkaz</button>';
+        modalBody += '<button style="margin-left: 10px;" onClick="generateFeedbackLinkForSpecificGroup(jQuery(\'#feedbackGroupSelect\').val())">Vygenerovať odkaz</button>';
         jQuery('.modal-body').html(modalBody);
         jQuery('#actionConfirmTitle').html('Vyberte skupinu pre spätnú väzbu');
-        showModal();
         hideLoading();
 
-        // Add event listener for the button
-        jQuery("#generateFeedbackLinkButton").on("click", function () {
-            //copy to clipboard the link
-            //get url without parameters
-            var selectedGroup = jQuery("#feedbackGroupSelect").val();
-            var url = window.location.origin + '/inovacne-vzdelavanie-spatna-vazba/?group=' + encodeURIComponent(selectedGroup);
-            navigator.clipboard.writeText(url).then(function () {
-                showResultOnSuccess('Odkaz bol skopírovaný do schránky');
-            }, function (err) {
-                showResultOnFail('', 'Nepodarilo sa skopírovať odkaz do schránky');
-            });
-        });
+        showModal();
     }).catch(e => {
         console.log(e.responseJSON);
         showResultOnFail('', 'Nepodarilo sa načítať skupiny. Dôvod: ' + e.responseJSON.data);
     });
 }
 
-function loadInnovationGroups() {
+function generateFeedbackLinkForSpecificGroup(group) {
+    var url = window.location.origin + '/inovacne-vzdelavanie-spatna-vazba/?group=' + encodeURIComponent(group);
+    //copy to clipboard
+    navigator.clipboard.writeText(url).then(function () {
+        showResultOnSuccess('Odkaz bol skopírovaný do schránky', url);
+    }, function (err) {
+        console.error('Could not copy text: ', err);
+        showResultOnFail('', 'Nepodarilo sa skopírovať odkaz do schránky. Skúste to prosím ručne: ' + url);
+    });
+}
+
+function loadInnovationGroups(form_post_id) {
     var formData = new FormData();
     formData.append("method", "getInnovationGroups");
+    formData.append("form_post_id", form_post_id);
     return callBackend(formData).then((response) => {
         return response.data;
     });
 }
 
-function showInnovationGroupsInFeedbackStatistics() {
-    loadInnovationGroups().then(groups => {
-        var groupList = jQuery("#innovationGroups");
-        groupList.empty();
-        groups.forEach(function (group) {
-            groupList.append('<li><label><input type="radio" name="group" class="innovation-group" value="' + group.group_name + '"> ' + group.group_name + '</label></li>');
+function prepareInnovationGroups() {
+    return loadInnovationGroups(null).then(groups => {
+            groups.forEach(function (group) {
+                if (!innovationGroups[group.program]) {
+                    innovationGroups[group.program] = [];
+                }
+
+                if (!innovationGroups[group.program][group.year]) {
+                    innovationGroups[group.program][group.year] = [];
+                }
+
+                innovationGroups[group.program][group.year].push(group.group_name);
+            });
+            hideLoading();
+        }).catch(e => {
+            console.log(e);
+            showResultOnFail('', 'Nepodarilo se načíst skupiny. Důvod: ' + e.responseJSON.data);
         });
-        hideLoading();
+}
+
+function showInnovationGroupsInFeedbackStatistics() {
+    prepareInnovationGroups().then(() => {
+        var select = jQuery("#innovationTopic");
+        for (var i in innovationGroups) {
+            var program = i;
+            select.append('<option value="' + program + '">' + program + '</option>');
+        };
     });
 }
 
-function loadFeedbacks() {
-    //check also innovatioNGroups selected, if non, send all
-    var formData = new FormData();
-    var selectedGroup = "";
-    jQuery('input[name="group"]:checked').each(function () {
-        selectedGroup = jQuery(this).val();
-    });
+function loadFeedbacks(selectedGroup) {
 
+    var formData = new FormData();
+    formData.append("method", "loadFeedbacks");
     if (selectedGroup) {
         formData.append("selectedInnovationGroup", selectedGroup);
     } else {
         return;
     }
-
-    formData.append("method", "loadFeedbacks");
     callBackend(formData).then((response) => {
         hideLoading();
-        console.log(response);
-
+        jQuery("#group").text(selectedGroup);
         showFeedbackCharts(response);
     });
 }
@@ -92,7 +150,7 @@ function showFeedbackCharts(answers) {
         const chartWrapper = document.createElement('div');
         chartWrapper.style.marginBottom = '50px';
 
-        const header = document.createElement('h3');
+        const header = document.createElement('h4');
         header.textContent = questionDetails.question;
         chartWrapper.appendChild(header);
 
@@ -109,7 +167,6 @@ function showFeedbackCharts(answers) {
                 const listItem = document.createElement('li');
                 listItem.textContent = answer;
                 listItem.style.marginLeft = '20px';
-                listItem.style.height = '40px';
                 listItem.style.background = 'rgba(60, 60, 60, 0.1)';
                 listItem.style.padding = '5px';
                 listItem.style.margin = '5px';
@@ -128,7 +185,7 @@ function createChart(canvas, answers) {
     //set height and width of the canvas
     ctx.canvas.height = 400;
     ctx.canvas.width = 800;
-    
+
     var labels;
 
     //if first is a number
